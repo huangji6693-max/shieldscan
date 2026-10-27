@@ -14,8 +14,27 @@ ERROR_CODES = {
     404: "NOT_FOUND",
     422: "VALIDATION_ERROR",
     500: "INTERNAL_ERROR",
+    502: "DEPENDENCY_UNAVAILABLE",
     503: "SERVICE_UNAVAILABLE",
 }
+
+
+def dependency_unavailable_error(
+    dependency: str,
+    message: str,
+    details: dict[str, Any] | None = None,
+) -> JSONResponse:
+    """Return a structured 503 DEPENDENCY_UNAVAILABLE response envelope."""
+    merged_details = {"dependency": dependency, **(details or {})}
+    return JSONResponse(
+        status_code=503,
+        content={
+            "status": "not_ready",
+            "database": "ok",
+            dependency: "unavailable",
+            **error_body("DEPENDENCY_UNAVAILABLE", message, details=merged_details),
+        },
+    )
 
 
 def error_body(code: str, message: str, details: Any = None) -> dict:

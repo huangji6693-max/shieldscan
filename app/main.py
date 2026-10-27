@@ -11,12 +11,14 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.config import get_settings
 from app.database import SessionLocal, init_db
 from app.errors import (
+    dependency_unavailable_error,
     http_exception_handler,
     unhandled_exception_handler,
     validation_exception_handler,
 )
 from app.routers import scans
 from app.services.secrets import validate_settings
+from app.services.zap_client import ZAPClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -74,11 +76,10 @@ def health():
 
 
 @app.get("/ready")
-def ready():
+async def ready():
     try:
         with SessionLocal() as db:
             db.execute(text("SELECT 1"))
-        return {"status": "ready", "database": "ok"}
     except Exception as exc:
         return JSONResponse(
             status_code=503,
@@ -88,3 +89,16 @@ def ready():
                 "error": {"code": "SERVICE_UNAVAILABLE", "message": str(exc)},
             },
         )
+
+    settings = get_settings()
+    if settings.scanner_mode.strip().lower() == "zap":
+        zap = ZAPClient(settings)
+        if not await zap.is_available():
+            return dependency_unavailable_error(
+                dependency="zap",
+                message=f"OWASP ZAP is unreachable at {settings.zap_api_url} while SCANNER_MODE=zap",
+                details={"zap_api_url": settings.zap_api_url, "scanner_mode": "zap"},
+            )
+        return {"status": "ready", "database": "ok", "scanner_mode": "zap", "zap": "ok"}
+
+    return {"status": "ready", "database": "ok", "scanner_mode": settings.scanner_mode, "zap": "not_required"}

@@ -123,6 +123,7 @@ All API errors return a stable JSON shape:
 | `TARGET_NOT_ALLOWED` | 400 | Blocked target (safety guard) |
 | `NOT_FOUND` | 404 | Scan or report missing |
 | `INTERNAL_ERROR` | 500 | Unhandled server error |
+| `DEPENDENCY_UNAVAILABLE` | 503 | Required upstream dependency (e.g. OWASP ZAP in `SCANNER_MODE=zap`) unreachable |
 
 ## 5. Operational Endpoints (Wave #1034)
 
@@ -132,7 +133,14 @@ Returns service identity, scanner version, and capability list. Used by process 
 
 ### `/ready` — Readiness
 
-Executes `SELECT 1` against SQLite. Returns `503` if database unavailable. Used by deploy gates and `make ci` smoke checks.
+Executes `SELECT 1` against SQLite and, when `SCANNER_MODE=zap`, verifies OWASP ZAP API connectivity (`/JSON/core/view/version/`). Returns `503` with `DEPENDENCY_UNAVAILABLE` if ZAP is unreachable in `zap` mode, or `SERVICE_UNAVAILABLE` if database is unavailable. Used by deploy gates and `make ci` smoke checks.
+
+### Lab Runbook (`docker compose ps`)
+
+```bash
+./start-lab.sh full
+docker compose ps   # confirm shieldscan-zap (:8081), shieldscan-dvwa (:4280), shieldscan-juiceshop (:3000) are Up
+```
 
 ## 6. Security Architecture
 

@@ -48,7 +48,15 @@ class ScanOrchestrator:
         try:
             self._update(scan, ScanStatus.RUNNING, "Initialising scan")
             zap = ZAPClient(self.settings)
-            use_zap = self.settings.scanner_mode == "zap" and await zap.is_available()
+            zap_configured = self.settings.scanner_mode.strip().lower() == "zap"
+            use_zap = zap_configured and await zap.is_available()
+
+            if zap_configured and not use_zap:
+                logger.warning(
+                    "Fallback to builtin scanner for scan %s: OWASP ZAP unreachable at %s (SCANNER_MODE=zap)",
+                    scan_id,
+                    self.settings.zap_api_url,
+                )
 
             if use_zap:
                 scan.scanner_used = "zap+builtin"
@@ -62,9 +70,22 @@ class ScanOrchestrator:
                     else:
                         self._update(scan, ScanStatus.PASSIVE_SCAN, msg)
 
-                alerts = await zap.run_full_scan(target, on_progress=zap_progress)
-                findings = [zap_alert_to_finding(a, i) for i, a in enumerate(alerts)]
-
+                try:
+                    alerts = await zap.run_full_scan(
+                        target,
+                        on_progress=zap_progress,
+                        policy_profile=getattr(self.settings, "zap_scan_policy", "standard"),
+                    )
+                    findings = [zap_alert_to_finding(a, i) for i, a in enumerate(alerts)]
+                except Exception as zap_exc:
+                    logger.warning(
+                        "ZAP scan interrupted for scan %s (%s); falling back to builtin scanner",
+                        scan_id,
+                        zap_exc,
+                    )
+                    use_zap = False
+                    scan.scanner_used = "builtin"
+                    self.db.commit()
             else:
                 scan.scanner_used = "builtin"
                 self.db.commit()

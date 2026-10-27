@@ -46,8 +46,11 @@ sudo usermod -aG docker $USER
 ### 2. Start lab targets and ZAP
 
 ```bash
-docker compose up -d
+./start-lab.sh full
+docker compose ps
 ```
+
+Verify all three containers (`shieldscan-zap`, `shieldscan-dvwa`, `shieldscan-juiceshop`) show `Up` in `docker compose ps` before running a full ZAP DAST scan.
 
 | Service | URL |
 |---------|-----|
