@@ -2,7 +2,7 @@ import asyncio
 import json
 
 from fastapi import APIRouter, BackgroundTasks, Depends
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from sqlalchemy.orm import Session
 
 from app.config import Settings, get_settings
@@ -12,6 +12,7 @@ from app.models import Scan, ScanStatus
 from app.schemas import Finding, ScanCreate, ScanDetail, ScanProgress, ScanSummary
 from app.services.finding_utils import enrich_findings
 from app.services.owasp import progress_for_status
+from app.services.sarif_exporter import generate_sarif_report
 from app.services.scan_orchestrator import ScanOrchestrator
 from app.services.target_guard import validate_scan_request
 
@@ -137,5 +138,28 @@ def download_report(scan_id: int, db: Session = Depends(get_db)):
     return Response(
         content=content,
         media_type="text/markdown",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/{scan_id}/report/sarif")
+def export_sarif(scan_id: int, db: Session = Depends(get_db)):
+    scan = db.query(Scan).filter(Scan.id == scan_id).first()
+    if not scan:
+        raise_api_error(404, "NOT_FOUND", "Scan not found")
+
+    findings = []
+    if scan.findings_json:
+        findings = enrich_findings([Finding(**f) for f in json.loads(scan.findings_json)])
+
+    sarif = generate_sarif_report(
+        scan_id=scan.id,
+        target_url=scan.target_url,
+        findings=findings,
+    )
+    filename = f"shieldscan-report-{scan_id}.sarif.json"
+    return JSONResponse(
+        content=sarif,
+        media_type="application/sarif+json",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

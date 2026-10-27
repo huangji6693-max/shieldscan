@@ -272,20 +272,27 @@ def _analyse_login_page(url: str, html: str, client: httpx.AsyncClient) -> list[
 async def fuzz_url_parameters(base_url: str, client: httpx.AsyncClient, max_params: int | None = None) -> list[Finding]:
     """Fuzz common parameter names on the base URL — injection, XSS, redirect."""
     if max_params is None:
-        max_params = get_settings().fuzz_max_params
+        max_params = get_settings().get_fuzz_budget()["max_params"]
     findings: list[Finding] = []
     ssrf_params: list[str] = []
     parsed = urlparse(base_url)
     base = urlunparse(parsed._replace(query="", fragment=""))
 
+    baseline_lower = ""
+    try:
+        base_resp = await client.get(base, timeout=8.0)
+        baseline_lower = (base_resp.text or "").lower()
+    except Exception:
+        pass
+
     for param in COMMON_FUZZ_PARAMS[:max_params]:
-        # XSS — use more payloads
-        for payload in XSS_PAYLOADS[:5]:
+        # XSS — only flag unencoded reflection of active tags/vectors
+        for payload in XSS_PAYLOADS[1:6]:
             probe = f"{base}?{urlencode({param: payload})}"
             try:
                 resp = await client.get(probe, timeout=10.0)
                 body = resp.text or ""
-                if payload in body or payload.replace("<", "&lt;") in body:
+                if payload in body:
                     findings.append(
                         _f(
                             f"xss-fuzz-{param}",
@@ -294,7 +301,7 @@ async def fuzz_url_parameters(base_url: str, client: httpx.AsyncClient, max_para
                             base,
                             f"Parameter '{param}' reflects user input without encoding.",
                             "Apply context-aware output encoding and Content-Security-Policy.",
-                            evidence=f"Payload reflected via ?{param}=",
+                            evidence=f"Payload {payload[:40]} reflected via ?{param}=",
                             parameter=param,
                             cwe="79",
                             confidence="Firm",
@@ -305,13 +312,14 @@ async def fuzz_url_parameters(base_url: str, client: httpx.AsyncClient, max_para
             except Exception:
                 pass
 
-        # SQLi — use more payloads
+        # SQLi — compare against baseline to avoid false positives on pages discussing SQL
         for payload in SQLI_PAYLOADS[:5]:
             probe = f"{base}?{urlencode({param: payload})}"
             try:
                 resp = await client.get(probe, timeout=12.0)
                 bl = (resp.text or "").lower()
-                if any(s in bl for s in SQL_ERROR_SIGNS):
+                matched_sigs = [s for s in SQL_ERROR_SIGNS if s in bl and s not in baseline_lower]
+                if matched_sigs:
                     findings.append(
                         _f(
                             f"sqli-fuzz-{param}",
@@ -320,7 +328,7 @@ async def fuzz_url_parameters(base_url: str, client: httpx.AsyncClient, max_para
                             base,
                             f"Parameter '{param}' triggers database error messages.",
                             "Use parameterised queries. Never concatenate SQL with user input.",
-                            evidence=f"SQL error after ?{param}=",
+                            evidence=f"SQL error ({matched_sigs[0]}) after ?{param}=",
                             parameter=param,
                             cwe="89",
                             confidence="Firm",
@@ -592,6 +600,101 @@ async def check_csrf_all_forms(forms: list[FormInfo]) -> list[Finding]:
     return findings
 
 
+async def check_insecure_design(forms: list[FormInfo], pages: list[str], client: httpx.AsyncClient) -> list[Finding]:
+    """OWASP A04:2021 — Insecure Design checks (weak recovery flows, missing anti-automation)."""
+    findings: list[Finding] = []
+    captcha_re = re.compile(r"captcha|recaptcha|hcaptcha|turnstile|cf-turnstile", re.I)
+
+    for i, form in enumerate(forms):
+        action_lower = (form.action_url or "").lower()
+        fields_lower = [f.lower() for f in form.fields]
+        is_recovery_or_reset = any(
+            k in action_lower or any(k in fl for fl in fields_lower)
+            for k in ("reset", "forgot", "recover", "password_new", "password_conf")
+        )
+        if is_recovery_or_reset and not any(
+            k in fl for fl in fields_lower for k in ("password_current", "old_password", "token", "reset_token", "code", "otp")
+        ):
+            findings.append(
+                _f(
+                    f"insecure-design-reset-{i}",
+                    "Insecure Design — Password Change/Reset Without Current Password or Verification Token",
+                    "High",
+                    form.page_url,
+                    "Password change or recovery form does not require the current password or a one-time reset token.",
+                    "Require the existing password or a time-limited cryptographic reset token before changing credentials.",
+                    evidence=f"action={form.action_url}, fields={form.fields[:6]}",
+                    parameter=form.action_url,
+                    cwe="640",
+                    confidence="Firm",
+                    owasp="A04:2021 — Insecure Design",
+                )
+            )
+
+        is_high_abuse_form = any(
+            k in action_lower or any(k in fl for fl in fields_lower)
+            for k in ("register", "signup", "contact", "feedback", "comment", "guestbook", "mtxmessage")
+        )
+        if is_high_abuse_form:
+            try:
+                resp = await client.get(form.page_url, timeout=8.0)
+                if not captcha_re.search(resp.text or ""):
+                    findings.append(
+                        _f(
+                            f"insecure-design-automation-{i}",
+                            "Insecure Design — Public Form Lacks Anti-Automation / Rate Control",
+                            "Low",
+                            form.page_url,
+                            "Public submission or registration workflow has no visible CAPTCHA or anti-automation challenge.",
+                            "Add rate limiting and CAPTCHA/bot protection on public submission and signup forms.",
+                            evidence=f"Form at {form.action_url} has no CAPTCHA markers",
+                            parameter=form.action_url,
+                            cwe="799",
+                            confidence="Medium",
+                            owasp="A04:2021 — Insecure Design",
+                        )
+                    )
+            except Exception:
+                pass
+
+    return findings
+
+
+async def check_subresource_integrity(url: str, client: httpx.AsyncClient) -> list[Finding]:
+    """OWASP A08:2021 — Software and Data Integrity Failures (external scripts/styles without SRI)."""
+    findings: list[Finding] = []
+    parsed_target = urlparse(url)
+    target_host = (parsed_target.hostname or "").lower()
+
+    try:
+        resp = await client.get(url, timeout=10.0)
+        html = resp.text or ""
+        for m in re.finditer(r"<script\b[^>]*\bsrc=[\"'](https?://[^\"']+)[\"'][^>]*>", html, re.I):
+            tag = m.group(0)
+            src = m.group(1)
+            src_host = (urlparse(src).hostname or "").lower()
+            if src_host and src_host != target_host and "integrity=" not in tag.lower():
+                findings.append(
+                    _f(
+                        f"sri-missing-{hash(src) % 10000}",
+                        "Subresource Integrity (SRI) Missing on External Script",
+                        "Medium",
+                        url,
+                        "External JavaScript is loaded from a third-party origin without an integrity hash.",
+                        "Add integrity=\"sha384-...\" and crossorigin=\"anonymous\" attributes to third-party script tags.",
+                        evidence=tag[:180],
+                        parameter=src[:120],
+                        cwe="353",
+                        confidence="High",
+                        owasp="A08:2021 — Software and Data Integrity Failures",
+                    )
+                )
+    except Exception:
+        pass
+
+    return findings
+
+
 async def run_owasp_top10_probes(
     target_url: str,
     client: httpx.AsyncClient,
@@ -633,6 +736,7 @@ async def run_owasp_top10_probes(
     if on_progress:
         on_progress("OWASP A03: Fuzzing URL parameters on homepage and crawled pages")
     settings = get_settings()
+    budget = settings.get_fuzz_budget()
     fuzz_targets = [target_url] + [p for p in crawl.pages[:12] if p != target_url]
     seen_fuzz: set[str] = set()
     for ft in fuzz_targets:
@@ -640,11 +744,15 @@ async def run_owasp_top10_probes(
         if norm in seen_fuzz:
             continue
         seen_fuzz.add(norm)
-        findings.extend(await fuzz_url_parameters(norm, client, max_params=settings.fuzz_max_params))
+        findings.extend(await fuzz_url_parameters(norm, client, max_params=budget["max_params"]))
 
     if on_progress:
         on_progress("OWASP A01: Testing for IDOR and access control issues")
     findings.extend(await check_idor(crawl, client))
+
+    if on_progress:
+        on_progress("OWASP A04: Checking workflow forms for insecure design patterns")
+    findings.extend(await check_insecure_design(all_forms, crawl.pages, client))
 
     if on_progress:
         on_progress("OWASP A06: Checking for outdated JavaScript components")
@@ -653,6 +761,13 @@ async def run_owasp_top10_probes(
         findings.extend(await check_vulnerable_components(page, client))
     for page in crawl.pages[:8]:
         findings.extend(await check_vulnerable_components(page, client))
+
+    if on_progress:
+        on_progress("OWASP A08: Checking subresource integrity on external scripts")
+    findings.extend(await check_subresource_integrity(target_url, client))
+    for page in crawl.pages[:8]:
+        if page != target_url:
+            findings.extend(await check_subresource_integrity(page, client))
 
     if on_progress:
         on_progress("OWASP A09: Checking for verbose error disclosure")
@@ -673,6 +788,6 @@ async def run_owasp_top10_probes(
     if crawl.param_urls:
         from app.services.extended_checks import probe_url_parameters
 
-        findings.extend(await probe_url_parameters(crawl.param_urls, client, max_probes=50))
+        findings.extend(await probe_url_parameters(crawl.param_urls, client, max_probes=budget["max_params"]))
 
     return findings

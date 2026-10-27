@@ -128,6 +128,25 @@ shieldscan/
 | GET | `/api/scans/{id}/progress` | Live progress |
 | GET | `/api/scans/{id}/report/html` | HTML report |
 | GET | `/api/scans/{id}/report/download` | Markdown download |
+| GET | `/api/scans/{id}/report/sarif` | SARIF v2.1.0 export (GitHub Code Scanning) |
+
+## SARIF Export & GitHub Code Scanning
+
+ShieldScan exports scan results in **SARIF v2.1.0** format (`https://json.schemastore.org/sarif-2.1.0.json`) for integration with GitHub Code Scanning and CI security gates:
+
+```bash
+# Export SARIF report for scan #1
+curl -s http://127.0.0.1:8000/api/scans/1/report/sarif -o shieldscan-results.sarif
+
+# Upload to GitHub Code Scanning in CI
+gh api \
+  --method POST \
+  -H "Accept: application/vnd.github+json" \
+  /repos/OWNER/REPO/code-scanning/sarifs \
+  -f commit_sha="$(git rev-parse HEAD)" \
+  -f ref="refs/heads/main" \
+  -f sarif="$(gzip -c shieldscan-results.sarif | base64 -w0)"
+```
 
 ## Development
 

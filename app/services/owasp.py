@@ -17,18 +17,33 @@ CWE_TO_OWASP = {
     "79": "A03:2021",
     "89": "A03:2021",
     "78": "A03:2021",
+    "94": "A03:2021",
+    "98": "A03:2021",
     "22": "A01:2021",
+    "284": "A01:2021",
+    "352": "A01:2021",
+    "601": "A01:2021",
+    "639": "A01:2021",
     "287": "A07:2021",
     "306": "A07:2021",
+    "307": "A07:2021",
     "798": "A07:2021",
     "311": "A02:2021",
     "319": "A02:2021",
     "326": "A02:2021",
     "327": "A02:2021",
+    "640": "A04:2021",
+    "799": "A04:2021",
+    "840": "A04:2021",
     "614": "A05:2021",
     "693": "A05:2021",
     "1021": "A05:2021",
     "829": "A06:2021",
+    "1104": "A06:2021",
+    "353": "A08:2021",
+    "494": "A08:2021",
+    "502": "A08:2021",
+    "209": "A09:2021",
     "918": "A10:2021",
 }
 
@@ -40,8 +55,12 @@ def classify_owasp(cwe: str = "", alert_name: str = "") -> str:
         return f"{code} — {OWASP_MAP[code]}"
 
     name = alert_name.lower()
-    if any(k in name for k in ("sql", "injection", "xss", "script", "command", "ldap", "xpath")):
+    if any(k in name for k in ("sql", "injection", "xss", "script", "command", "ldap", "xpath", "ssti", "lfi")):
         return "A03:2021 — Injection"
+    if any(k in name for k in ("subresource integrity", "sri", "deserialization", "integrity")):
+        return "A08:2021 — Software and Data Integrity Failures"
+    if any(k in name for k in ("insecure design", "business logic", "password reset", "anti-automation")):
+        return "A04:2021 — Insecure Design"
     if any(k in name for k in ("cookie", "ssl", "tls", "crypto", "hash", "password")):
         return "A02:2021 — Cryptographic Failures"
     if any(k in name for k in ("auth", "session", "login", "credential")):

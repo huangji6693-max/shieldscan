@@ -7,6 +7,7 @@ from app.schemas import Finding
 from app.services.crawler import crawl_site
 from app.services.deep_probes import run_deep_probes
 from app.services.extended_checks import run_extended_checks
+from app.services.finding_utils import enrich_findings
 from app.services.owasp_top10 import run_owasp_top10_probes
 from app.services.passive_checks import check_security_headers
 
@@ -14,19 +15,13 @@ logger = logging.getLogger(__name__)
 
 
 def _dedupe_findings(findings: list[Finding]) -> list[Finding]:
-    seen: set[str] = set()
-    unique: list[Finding] = []
-    for f in findings:
-        key = f.id
-        if key not in seen:
-            seen.add(key)
-            unique.append(f)
-    return unique
+    return enrich_findings(findings)
 
 
 async def run_builtin_scan(target_url: str, on_progress=None) -> list[Finding]:
     """Full built-in scan: crawl, OWASP Top 10 probes, headers, extended checks."""
     settings = get_settings()
+    budget = settings.get_fuzz_budget()
     findings: list[Finding] = []
 
     async with httpx.AsyncClient(
@@ -40,8 +35,8 @@ async def run_builtin_scan(target_url: str, on_progress=None) -> list[Finding]:
         crawl = await crawl_site(
             target_url,
             client,
-            max_pages=settings.crawl_max_pages,
-            max_depth=settings.crawl_max_depth,
+            max_pages=budget["max_pages"],
+            max_depth=budget["max_depth"],
         )
         if on_progress:
             on_progress(
@@ -71,11 +66,12 @@ async def run_builtin_scan(target_url: str, on_progress=None) -> list[Finding]:
                 client,
                 crawl,
                 on_progress=on_progress,
-                fuzz_max_params=settings.fuzz_max_params,
+                fuzz_max_params=budget["max_params"],
             )
         )
 
+        deduped = _dedupe_findings(findings)
         if on_progress:
-            on_progress(f"Scan complete — {len(_dedupe_findings(findings))} findings")
+            on_progress(f"Scan complete — {len(deduped)} findings")
 
-    return _dedupe_findings(findings)
+    return deduped
