@@ -25,6 +25,7 @@ const els = {
   statMedium: document.getElementById('stat-medium'),
   statLow: document.getElementById('stat-low'),
   owaspBreakdown: document.getElementById('owasp-breakdown'),
+  remediationCards: document.getElementById('remediation-cards'),
   history: document.getElementById('history-list'),
   exportHtml: document.getElementById('export-html'),
   exportMd: document.getElementById('export-md'),
@@ -170,6 +171,90 @@ function countByRisk(findings) {
   return counts;
 }
 
+const REMEDIATION_CARDS = {
+  'A01:2021': {
+    title: 'Access Control & Form Protection',
+    what: 'Private pages or state-changing forms can be triggered without proper authorisation.',
+    fix: 'Require login on admin/user pages, verify user ownership for every record ID, and add CSRF tokens to POST forms.',
+  },
+  'A02:2021': {
+    title: 'Data & Connection Encryption',
+    what: 'Passwords or session cookies may travel over unencrypted HTTP connections.',
+    fix: 'Enable HTTPS site-wide, redirect HTTP to HTTPS, and set Secure + HttpOnly flags on login cookies.',
+  },
+  'A03:2021': {
+    title: 'Input & Database Injection',
+    what: 'Search boxes, URL parameters, or forms accept untrusted commands or scripts.',
+    fix: 'Use parameterised database queries and escape all user input before rendering it in HTML.',
+  },
+  'A04:2021': {
+    title: 'Safe Workflow Design',
+    what: 'Password reset or public submission forms lack verification tokens or spam limits.',
+    fix: 'Require one-time reset tokens for password recovery and add CAPTCHA/rate limits to public forms.',
+  },
+  'A05:2021': {
+    title: 'Website Security Settings',
+    what: 'Browser security headers are missing or internal folders/files (.env, backups) are exposed.',
+    fix: 'Add CSP, HSTS, and X-Frame-Options headers, disable directory listing, and block dotfiles.',
+  },
+  'A06:2021': {
+    title: 'Outdated Website Libraries',
+    what: 'Older JavaScript or CMS plugin versions with known vulnerabilities are loaded.',
+    fix: 'Upgrade jQuery, Bootstrap, and CMS plugins to their latest stable releases.',
+  },
+  'A07:2021': {
+    title: 'Login & Account Protection',
+    what: 'Login forms allow unlimited password guessing or expose credentials in URLs.',
+    fix: 'Submit login forms via HTTPS POST only and enforce rate limiting / account lockout.',
+  },
+  'A08:2021': {
+    title: 'Software & Script Integrity',
+    what: 'Third-party scripts are loaded without cryptographic integrity hashes.',
+    fix: 'Add Subresource Integrity (integrity="sha384-...") attributes to external script tags.',
+  },
+  'A09:2021': {
+    title: 'Error Messages & Monitoring',
+    what: 'Detailed technical stack traces or database errors are visible to site visitors.',
+    fix: 'Display friendly generic error pages to visitors and log technical details server-side only.',
+  },
+  'A10:2021': {
+    title: 'Outbound Server Requests (SSRF)',
+    what: 'URL-accepting parameters could trick your server into fetching internal network resources.',
+    fix: 'Allowlist trusted destination domains and block requests to internal/private IP addresses.',
+  },
+};
+
+function getCardForCategory(owasp) {
+  const code = (owasp || '').split(' ')[0].trim();
+  return REMEDIATION_CARDS[code] || REMEDIATION_CARDS['A05:2021'];
+}
+
+function renderRemediationCards(findings) {
+  if (!els.remediationCards) return;
+  const seen = new Map();
+  findings.forEach(f => {
+    const code = (f.owasp_category || 'A05:2021').split(' ')[0].trim() || 'A05:2021';
+    const card = getCardForCategory(code);
+    if (!seen.has(code)) {
+      seen.set(code, { code, count: 0, ...card });
+    }
+    seen.get(code).count += 1;
+  });
+
+  const cards = Array.from(seen.values());
+  els.remediationCards.innerHTML = cards.length
+    ? cards.map(c => `
+        <div class="remediation-card">
+          <div class="remediation-card-header">
+            <strong>${esc(c.title)}</strong>
+            <span class="remediation-badge">${esc(c.code)} &middot; ${c.count}</span>
+          </div>
+          <p class="remediation-what">${esc(c.what)}</p>
+          <p class="remediation-fix"><strong>How to fix:</strong> ${esc(c.fix)}</p>
+        </div>`).join('')
+    : '<p style="color:var(--muted);font-size:0.85rem">No remediation actions needed.</p>';
+}
+
 function renderOwaspBreakdown(findings) {
   const buckets = {};
   findings.forEach(f => {
@@ -212,13 +297,14 @@ function renderFindings(findings) {
 
   filtered.forEach(f => {
     const tr = document.createElement('tr');
+    const plainFix = f.solution || getCardForCategory(f.owasp_category).fix;
     tr.innerHTML = `
       <td><span class="risk-badge risk-${f.risk}">${esc(f.risk)}</span></td>
       <td><strong>${esc(f.name)}</strong></td>
       <td style="word-break:break-all;font-size:0.78rem">${esc(f.url)}</td>
       <td><code class="param-code">${esc(displayParameter(f))}</code></td>
       <td class="evidence-text">${esc(truncate(f.evidence || f.description || '—', 120))}</td>
-      <td style="font-size:0.82rem">${esc(f.solution || f.description || '')}</td>
+      <td style="font-size:0.82rem">${esc(plainFix)}</td>
     `;
     els.findingsBody.appendChild(tr);
   });
@@ -264,6 +350,7 @@ async function loadResults(id) {
   activeFilter = 'all';
   document.querySelectorAll('.filter-chip').forEach(c => c.classList.toggle('active', c.dataset.filter === 'all'));
   renderOwaspBreakdown(allFindings);
+  renderRemediationCards(allFindings);
   renderFindings(allFindings);
   els.report.textContent = data.ai_report || '';
 }

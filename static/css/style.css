@@ -137,8 +137,48 @@ main { max-width: 1200px; margin: 0 auto; padding: 2rem; }
   margin-bottom: 0.65rem;
 }
 
-.owasp-section {
+.owasp-section, .remediation-section {
   margin: 1rem 0 1.25rem;
+}
+
+.remediation-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.remediation-card {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  font-size: 0.82rem;
+}
+
+.remediation-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+}
+
+.remediation-badge {
+  font-size: 0.72rem;
+  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.12);
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+}
+
+.remediation-what {
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.remediation-fix {
+  color: var(--text);
 }
 
 .scan-card {
